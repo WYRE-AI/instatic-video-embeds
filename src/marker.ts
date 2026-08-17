@@ -52,9 +52,8 @@ export const MARKER_SUFFIX = '@@'
  * positioning.
  *
  * **Branch 2 — a bare code span.** Instatic's richtext sanitizer sometimes
- * drops a `<p>` wrapper, so
- * the paragraph form is not guaranteed to survive. This keeps the feature
- * working when it doesn't.
+ * drops a `<p>` wrapper, so the paragraph form is not guaranteed to survive.
+ * This keeps the feature working when it doesn't.
  *
  * One regex rather than two sequential passes, deliberately. Two passes
  * double-count a failed marker: the paragraph pass leaves it in place, then
