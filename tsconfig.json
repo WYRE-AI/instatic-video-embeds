@@ -13,5 +13,10 @@
     "forceConsistentCasingInFileNames": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "modules/**/*.ts", "instatic-plugin.config.ts"]
+  // Scoped to the CMS-independent code so `bun run typecheck` is green in a
+  // fresh clone. `instatic-plugin.config.ts` and `server/index.ts` import
+  // `@instatic/plugin-sdk`, which only resolves once the SDK is symlinked from
+  // an Instatic checkout (see README); those two files are typechecked by
+  // `instatic-plugin lint` / `build` instead.
+  "include": ["src/**/*.ts", "tests/**/*.ts"]
 }

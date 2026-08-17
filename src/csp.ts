@@ -127,14 +127,3 @@ export function addFrameSrcOrigins(html: string, origins: readonly string[]): st
     return `<meta http-equiv="Content-Security-Policy" content="${serializeCsp(plan)}">`
   })
 }
-
-/**
- * Does this document contain markup emitted by our embed module?
- *
- * Used to decide whether a page needs its `frame-src` widened at all. Pages
- * with no embed keep `frame-src 'none'`, which is the entire point of doing
- * this per-page instead of site-wide.
- */
-export function hasEmbedMarker(html: string, marker: string): boolean {
-  return typeof html === 'string' && html.includes(marker)
-}

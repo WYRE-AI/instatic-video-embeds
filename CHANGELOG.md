@@ -9,45 +9,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- URL parsing and ID validation for YouTube, Vimeo, Loom and Wistia
-  (`src/providers.ts`). Embed URLs are rebuilt from a hardcoded provider origin
-  plus an ID that matched a strict character allowlist; no part of the
-  author-supplied URL reaches the markup.
-- Lazy-loading 16:9 embed markup with an optional poster facade, an accessible
-  iframe `title`, and a minimal `allow` attribute (`src/embed.ts`).
-- Surgical `frame-src` widening for a `publish.html` filter (`src/csp.ts`),
-  mirroring the host's own CSP serialization so the emitted policy stays
-  byte-identical to what the publisher would produce.
-- 101 tests covering the parsing, escaping and CSP logic.
+- Inline video markers for post bodies. Writing
+  `` `@@video:https://vimeo.com/123456789@@` `` on its own line renders a
+  lazy-loading, responsive 16:9 embed at that exact position in the copy.
+- Support for YouTube, Vimeo, Loom and Wistia, including YouTube `watch` /
+  `youtu.be` / `embed` / `shorts` / `/v/` forms, Vimeo channel / group / album /
+  ondemand shapes, and Vimeo unlisted-video privacy hashes.
+- A `publish.html` filter (`cms.hooks`) that substitutes markers and widens
+  `frame-src` with only the provider origins present on that page. Pages with no
+  valid marker are returned byte-identical and keep `frame-src 'none'`.
+- Strict URL parsing and ID validation (`src/providers.ts`). Embed URLs are
+  rebuilt from a hardcoded provider origin plus an ID that matched a strict
+  character allowlist; no part of the author-supplied URL reaches the markup.
+- Byte-exact reimplementation of the host's CSP serializer, so the rewritten
+  policy matches what the publisher itself would emit.
+- Privacy defaults: `youtube-nocookie.com` with `rel=0`, `dnt=1` for Vimeo and
+  Wistia, always-muted autoplay, and a minimal iframe `allow` attribute.
+- 137 tests covering parsing, escaping, marker substitution, CSP rewriting and
+  the end-to-end filter.
+
+### Design notes
+
+- **The marker must be a code span.** Determined by measurement, not
+  preference: every plain-text form tested was corrupted on the first markdown
+  round-trip, because linkify autolinks the URL and `escapeInline`
+  backslash-escapes ``\ ` * _ ~ [ ]`` — and YouTube IDs legitimately contain
+  `_`. The code-span form round-trips byte-identically over three passes.
+- A marker that fails validation is left untouched as inert monospace text. It
+  never becomes a broken player, never emits an `<iframe>` for an unvalidated
+  URL, and never widens the CSP. Disabling the plugin degrades markers to
+  visible literal text rather than breaking pages.
 
 ### Known limitations
 
-- **The plugin is not yet wired together.** The canvas module and server
-  entrypoint are deliberately unwritten pending a decision on how to reach
-  inline placement — see the README.
-- **Inline placement inside a post body is not achievable** with any plugin
-  surface Instatic exposes at `6b055cf` (v0.0.16). The body editor's Tiptap
-  extension list is a hardcoded literal, the insertion menus are static
-  catalogues, and the SDK has no rich-text surface. Raw HTML in a body is
-  stripped by DOMPurify, not escaped.
-- CSP-dependent behaviour does not appear in the editor canvas, because the
-  preview iframe does not run `publish.html`.
+- **Embeds are invisible in the editor.** The preview iframe deliberately does
+  not run `publish.html`, so the marker stays visible as text while writing and
+  becomes a video only on the published page. No plugin-side workaround exists:
+  the body editor's Tiptap extension list is a hardcoded literal, its insertion
+  menus are static catalogues, and the SDK exposes no rich-text surface.
+- Already-published pages are byte-frozen and need a republish.
+- `publish.html` does not run on Layer C hole or loop fragments.
 - Descript and Canva were evaluated and deferred: their embed URL contracts
   could not be confirmed from a primary source, and guessing at an embed origin
-  would undermine the allowlist model the rest of the parser depends on.
+  would undermine the allowlist model the parser depends on.
 
 ### Upstream issues found
 
 - The `--kind content-editor` scaffold emits `contentAccess` and `entrypoints`
   inside `definePlugin()`, where neither key exists. Both are silently dropped,
   making every `cms.content.*` call fail closed regardless of granted
-  permissions. Documented in the README.
+  permissions.
+- Instatic's docs state that module HTML is sanitized by the host. It is not;
+  no sanitizer runs over plugin render output.
 
 ### Security
 
 - Independently reproduced two pre-existing defects in Instatic itself while
   verifying this plugin's assumptions. Both are upstream issues, not defects in
-  this plugin, and are reported in full in the handover notes:
+  this plugin:
   - A pre-existing defect in Instatic's richtext sanitizer was identified while
   verifying this plugin. It is an upstream issue, not a defect in this plugin,
   and has been reported through the maintainers' private disclosure channel.

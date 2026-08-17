@@ -1,89 +1,84 @@
 # instatic-video-embeds
 
-Multi-provider video embeds (YouTube, Vimeo, Loom, Wistia) for the
-[Instatic](https://github.com/CoreBunch/Instatic) CMS, paired with the
-`publish.html` CSP filter that plugin modules cannot perform on their own.
+Inline video embeds (YouTube, Vimeo, Loom, Wistia) for
+[Instatic](https://github.com/CoreBunch/Instatic) blog post bodies, with a
+per-page CSP `frame-src` lift that plugin code cannot otherwise perform.
 
-> **Status: incomplete, blocked on a product decision.** The primary
-> requirement — let an author place a video *inline, at an arbitrary position
-> inside a blog post body* — cannot be met by any plugin surface Instatic
-> currently exposes. This is a verified negative result, documented in
-> [Inline placement is not supported](#inline-placement-is-not-supported)
-> below. What is in this repo is the verified, tested core (URL parsing, embed
-> markup, CSP widening); the module and server entrypoint that would wire it
-> together are deliberately not written yet, because their shape depends on
-> which fallback is chosen.
+Write this on its own line anywhere in a post body — **the backticks are
+required**:
+
+```markdown
+`@@video:https://vimeo.com/123456789@@`
+```
+
+At publish time that becomes a lazy-loading, responsive 16:9 embed. Everything
+else in the post is untouched.
+
+> **Read [Editor preview caveat](#editor-preview-caveat) before using this.**
+> The embed is **invisible while you are writing** — you see the marker text.
+> It only becomes a video on the published page. That is a hard constraint of
+> Instatic's plugin system, not a bug here.
 
 ---
 
-## Inline placement is not supported
+## Supported providers
 
-Verified against `CoreBunch/Instatic` @ `6b055cf` (v0.0.16).
+| Provider | Example URL | ID shape | Embed origin |
+| --- | --- | --- | --- |
+| YouTube | `https://youtu.be/dQw4w9WgXcQ` | 11 base64-url chars | `https://www.youtube-nocookie.com` |
+| Vimeo | `https://vimeo.com/123456789` | 6–12 digits (+ optional privacy hash) | `https://player.vimeo.com` |
+| Loom | `https://www.loom.com/share/<32-hex>` | 32 lowercase hex | `https://www.loom.com` |
+| Wistia | `https://acme.wistia.com/medias/abc123xyz9` | 8–12 lowercase alphanumeric | `https://fast.wistia.net` |
 
-**A plugin cannot register a custom block or node in the post-body editor.**
-All three things that would be required fail independently:
+YouTube `watch` / `youtu.be` / `embed` / `shorts` / `/v/` forms are all
+accepted, as are Vimeo's channel, group, album and ondemand URL shapes and
+unlisted-video privacy hashes.
 
-1. **The body editor's extension list is a hardcoded literal.**
-   `src/admin/pages/content/TiptapBodyEditor.tsx:126-231` passes a static array
-   to `useEditor({ extensions: [...] })`. It is not spread from any variable,
-   registry, or context, and nothing under `src/admin/pages/content/` references
-   the plugin runtime.
+Descript and Canva were evaluated and deferred: their embed URL contracts could
+not be confirmed from a primary source, and guessing at an embed origin would
+undermine the allowlist model the rest of the parser depends on.
 
-2. **The insertion menus are static catalogues.** The slash menu is built by
-   `buildSlashItems()` in
-   `src/admin/pages/content/components/BodySlashMenu/SlashCommand.ts:86-186`
-   (11 fixed items). The canvas notch is four fixed items in
-   `src/admin/pages/content/ContentPage.tsx:428-455`. The gutter menu is a
-   module-level `QUICK_INSERT` array in
-   `src/admin/pages/content/components/BodyFloatingMenu/BodyFloatingMenu.tsx:78-181`.
-   None performs a registry lookup. `docs/features/content-workspace.md:82`
-   states plainly that the notch *"does not show the Site editor's module
-   picker."*
+### Failure behaviour
 
-3. **The plugin SDK has no rich-text surface at all.** `tiptap`, `prosemirror`,
-   `registerBlock`, `registerNode`, `nodeView`, `blockMenu` and `editorExtension`
-   return zero hits across `src/core/plugin-sdk/`, `src/core/plugins/`,
-   `server/plugins/` and `examples/`. The complete browser-side API
-   (`src/core/plugin-sdk/types/editorApi.ts:17-117`) is commands, toolbar,
-   panels, canvas overlays, store, palette and dashboard widgets. The manifest
-   is a closed TypeBox schema with exactly four entrypoints —
-   `server`, `editor`, `admin`, `modules` (`src/core/plugins/manifest.ts:293-298`).
+An unrecognized or malformed marker is **left exactly as it was** — inert
+monospace text. It never becomes a broken player, never emits an `<iframe>` for
+an unvalidated URL, and never widens the page's CSP. The same is true if this
+plugin is later disabled or uninstalled: markers degrade to visible literal
+text rather than breaking the page.
 
-**And raw HTML in a body is stripped, not escaped.** Post bodies are stored as
-markdown and rendered through `renderMarkdownToHtml`, then passed through
-DOMPurify with an allowlist that contains no `iframe`, `video`, `img`, `figure`
-or `table` (`RICHTEXT_CONFIG.ALLOWED_TAGS`, `src/core/sanitize.ts:123-138`). A
-pasted `<iframe>` is silently deleted at publish. It only *looks* like visible
-text in the editor, because `src/core/markdown/markdownDocument.ts:144-150`
-turns a block-HTML token into a plain text node.
+---
 
-`base.video` does not help: it is a site-canvas module usable only in page and
-template trees, so it can sit above or below the body outlet but never *within*
-the copy.
+## Why the backticks are required
 
-### The one path that would actually satisfy inline placement
+The marker must be an inline **code span**. This was determined by measurement
+against Instatic's real markdown round-trip, not by preference.
 
-A plain-text marker in the body (e.g. `@@video:https://vimeo.com/123@@`),
-substituted for real markup by a `publish.html` server filter. That filter runs
-after DOMPurify and after the CSP `<meta>` is already in the document
-(`server/publish/publishedHtmlPipeline.ts:41-71`), so it can insert an
-`<iframe>` *and* widen `frame-src` in the same pass.
+A marker written as plain text does **not** survive the editor's
+markdown → ProseMirror → markdown cycle, for two independent reasons:
 
-Honest costs, so this is a decision and not a recommendation dressed up as one:
+1. **Linkify autolinks the URL.** `@@video:https://vimeo.com/123@@` comes back
+   as `@@video:[https://vimeo.com/123@@](https://vimeo.com/123@@)` — the
+   closing delimiter is swallowed into the href.
+2. **`escapeInline` backslash-escapes ``\ ` * _ ~ [ ]``**
+   (`src/core/markdown/markdownDocument.ts`). YouTube IDs are
+   `[A-Za-z0-9_-]{11}`, so any ID containing `_` returns as `dQw4w9\_gXcQ`.
 
-- **No editor preview.** The author sees raw marker text while writing. The
-  preview iframe deliberately does not run `publish.before / publish.html /
-  publish.after` (`server/publish/runtime/previewRuntime.ts:106`).
-- It is a string rewrite over the whole page, not a first-class block.
-- Marker syntax must avoid `` \ ` * _ ~ [ ] `` — `escapeInline`
-  (`src/core/markdown/markdownDocument.ts:667-672`) backslash-escapes those
-  inside a raw-text node on every editor round-trip.
-- An `entrypoints.editor` plugin could add a ⌘K command that inserts the marker.
-  That is the closest thing to a block-menu item the SDK allows, and it lands in
-  Spotlight and the toolbar, not in the `/` menu.
+A code span sidesteps both: `escapeInline` returns text untouched inside a code
+mark, and linkify does not autolink within code.
 
-The alternative is to accept a fixed template slot via `base.video`, which
-renders correctly but cannot be positioned in the copy.
+**Measured**, at `v0.0.16-3-g6b055cf7`:
+
+| Marker form | Survives round-trip |
+| --- | --- |
+| `` `@@video:URL@@` `` (code span) | **yes** — byte-identical over 3 passes |
+| `@@video:URL@@` | no — autolinked |
+| `::video URL::` | no — autolinked |
+| `!video[URL]` | no — autolinked + `[` `]` escaped |
+| `{{video URL}}` | no — autolinked |
+| bare URL | no — autolinked |
+
+The code span buys a second property for free: it is what makes the
+uninstall/disable path degrade to inert text rather than broken markup.
 
 ---
 
@@ -93,10 +88,9 @@ A plugin-registered module **cannot** lift the page's Content-Security-Policy.
 
 Instatic's own `base.video` returns `cspSources` from `render()` to allow
 YouTube frames. That capability is **host-only**: `cspSources` lives on the host
-`RenderOutput` (`src/core/module-engine/types.ts`) and is **absent from the
-plugin SDK entirely** — it appears nowhere under `src/core/plugin-sdk/`, and
-neither `DefineModuleConfig` nor `PluginRenderOutput` accepts it. A plugin
-cannot declare it in the first place.
+`RenderOutput` and is **absent from the plugin SDK entirely** — it appears
+nowhere under `src/core/plugin-sdk/`, and neither `DefineModuleConfig` nor
+`PluginRenderOutput` accepts it. A plugin cannot declare it in the first place.
 
 Two runtime normalizers enforce the same conclusion for anything smuggled past
 the type layer, each rebuilding a fresh object with exactly `{ html, css, js }`:
@@ -106,16 +100,16 @@ the type layer, each rebuilding a fresh object with exactly `{ html, css, js }`:
 | QuickJS wire normalizer | `server/plugins/quickjs/bootstrap/src/modulePackRuntime.ts` (`normalizeRenderOutput`) |
 | Host module adapter | `src/core/plugins/moduleAdapter.ts` (render wrapper) |
 
-The published base policy sets `frame-src 'none'`
-(`createBaseCspPlan`, `src/core/publisher/cspPlan.ts`). So a plugin module that
-emits an `<iframe>` and nothing else produces a frame the browser refuses to
-load — silently, with only a console message.
+The published base policy sets `frame-src 'none'` (`createBaseCspPlan`,
+`src/core/publisher/cspPlan.ts`). So an `<iframe>` emitted by plugin code alone
+produces a frame the browser refuses to load — silently, with only a console
+message.
 
-The fix is to pair the module with a **`publish.html` filter** (permission
-`cms.hooks`) that adds the required provider origins to `frame-src` **only on
-pages that actually contain an embed**. `src/csp.ts` implements this.
+The `publish.html` filter is the only route, because the CSP is emitted as a
+`<meta http-equiv="Content-Security-Policy">` tag **inside the document**, and
+`publish.html` runs last in the pipeline with no sanitizer after it.
 
-### The CSP is a derived value — handle with care
+### The CSP is a derived value — handled with care
 
 The published policy is built as data and serialized deterministically so the
 same inputs always produce byte-identical output, which feeds content hashing.
@@ -130,15 +124,43 @@ from `src/core/publisher/cspPlan.ts` exactly, and `tests/csp.test.ts` pins the
 byte-level format.
 
 The host exports a `rewriteCspMeta` helper that does this, but it lives in
-`@core/publisher` — a host module that is **not** re-exported from the plugin
-SDK and is not reachable from inside the QuickJS sandbox where the filter runs.
-Reimplementing it faithfully is the only option.
+`@core/publisher` — not re-exported from the plugin SDK and not reachable from
+inside the QuickJS sandbox where the filter runs. Reimplementing it faithfully
+is the only option.
 
-**Only `frame-src` is ever touched**, and only with the origins for providers
-actually present on that page. A page embedding one Vimeo video does not get its
-policy widened to Loom, Wistia and YouTube. A page with no embed keeps
-`frame-src 'none'`. If a document has no CSP `<meta>` tag, it is returned
-unchanged — we never invent a policy.
+**Only `frame-src` is ever touched**, and only with origins for providers
+actually present on that page. A page with one Vimeo video does not get widened
+to Loom, Wistia and YouTube. A page with no valid marker is returned
+**byte-identical** and keeps `frame-src 'none'`. A document with no CSP `<meta>`
+tag is returned unchanged — we never invent a policy.
+
+---
+
+## Editor preview caveat
+
+**The embed does not appear while you are editing.** You see the marker text in
+the body editor, and the video only exists on the published page.
+
+This is deliberate on Instatic's side. The preview iframe does not run the
+publish hooks (`server/publish/runtime/previewRuntime.ts:106`):
+
+> The preview iframe does NOT fire `publish.before / publish.html /
+> publish.after` — those mutate persisted state and aren't safe to run on every
+> keystroke.
+
+There is no workaround available to a plugin: the body editor's Tiptap
+extension list is a hardcoded literal, its insertion menus are static
+catalogues, and the plugin SDK has no rich-text surface at all. That is also why
+this plugin uses a marker instead of a proper editor block — see
+[Why not a real editor block](#why-not-a-real-editor-block).
+
+Two further consequences worth knowing:
+
+- **Already-published pages are byte-frozen.** Installing this plugin does not
+  retroactively patch pages baked before it existed; they need a republish
+  (`server/publish/republish.ts`).
+- **Lazily-hydrated fragments are not covered.** `publish.html` does not run on
+  Layer C hole or loop fragments.
 
 ---
 
@@ -150,46 +172,36 @@ unchanged — we never invent a policy.
 on it being right:
 
 - **The author's URL is parsed, then discarded.** The only things that survive
-  are a provider id from a closed enum and an opaque media id that matched a
+  are a provider ID from a closed enum and an opaque media ID that matched a
   strict character allowlist. Embed URLs are rebuilt from a hardcoded origin
-  plus that validated id. **The raw URL is never interpolated into markup.**
+  plus that validated ID. **The raw URL is never interpolated into markup.**
 - **Allowlist, never blocklist.** Hosts are compared against an exact set (or,
   for Wistia's per-account subdomains, an anchored pattern). Paths must match a
-  known shape. Ids must match a strict regex.
+  known shape. IDs must match a strict regex.
 - Rejected: credential smuggling (`https://vimeo.com@evil.example/123`),
   lookalike hosts (`vimeo.com.evil.example`), explicit ports, `javascript:` /
   `data:` / `file:` schemes, embedded whitespace and control characters,
-  protocol-relative URLs, and bare ids with no URL around them.
-
-| Provider | ID shape | Embed origin |
-| --- | --- | --- |
-| YouTube | 11 base64-url chars | `https://www.youtube-nocookie.com` |
-| Vimeo | 6–12 digits (+ optional privacy hash) | `https://player.vimeo.com` |
-| Loom | 32 lowercase hex | `https://www.loom.com` |
-| Wistia | 8–12 lowercase alphanumeric | `https://fast.wistia.net` |
+  protocol-relative URLs, and bare IDs with no URL around them.
+- Parsing uses an anchored regex, **not** `new URL()` — see
+  [the per-VM globals split](#fetch-and-url-availability-depend-on-which-vm-you-are-in).
 
 ### The host does not sanitize module HTML
 
 Instatic's docs state that module output is sanitized. **It is not.**
 `applyPublishedHtmlPipeline` runs no sanitizer over the assembled document —
 DOMPurify is applied at the prop / richtext / SVG boundary and on media upload,
-never to module `render()` output. Escaping is the module's job, and
-`src/embed.ts` does it.
+never to what a plugin emits. Escaping is this plugin's job, and `src/embed.ts`
+does it.
 
 ### The pre-escaping asymmetry
 
-The publisher runs `escapeProps` over props **before** calling `render()`, and
-dispatches on the declared control type:
-
-- `url` / `image` props are scheme-checked but **not** HTML-escaped
-- every other type is `escapeHtml`-ed
-
-The editor canvas runs the same module in the admin browser with **raw** props
-and no such pass. So the same string arrives pre-escaped on the publish path and
-unescaped on the canvas path. Escaping unconditionally would double-encode an
-author's "Q&A" into "Q&amp;A"; not escaping would let the canvas break out of
-the attribute. `renderEmbed` takes an `escapeText` flag so `render()` and
-`preview()` can each do the right thing.
+The publisher runs `escapeProps` **before** `render()`, dispatching on control
+type: `url` / `image` props are scheme-checked but **not** HTML-escaped, while
+every other type is `escapeHtml`-ed. The editor canvas passes props through
+**raw**. So the same string arrives pre-escaped on one path and unescaped on the
+other. Escaping unconditionally would double-encode an author's "Q&A" into
+"Q&amp;A"; not escaping would allow attribute breakout. `renderEmbed` takes an
+`escapeText` flag so each path does the right thing.
 
 ### Privacy defaults
 
@@ -200,23 +212,37 @@ attribute grants only what a player needs — never `camera`, `microphone`,
 
 ---
 
-## Editor preview caveat
+## Why not a real editor block
 
-CSP-dependent behaviour will **not** appear in the editor canvas. The preview
-iframe deliberately does not run the publish filters
-(`server/publish/runtime/previewRuntime.ts:106`):
+Verified against `v0.0.16-3-g6b055cf7`. **A plugin cannot register a custom
+block or node in the post-body editor.** Three independent blockers:
 
-> The preview iframe does NOT fire `publish.before / publish.html /
-> publish.after` — those mutate persisted state and aren't safe to run on every
-> keystroke.
+1. **The extension list is a hardcoded literal.**
+   `src/admin/pages/content/TiptapBodyEditor.tsx:126-231` passes a static array
+   to `useEditor({ extensions: [...] })` — not spread from any variable,
+   registry or context.
+2. **The insertion menus are static catalogues.** `buildSlashItems()`
+   (`BodySlashMenu/SlashCommand.ts:86-186`, 11 fixed items), a 4-item notch
+   (`ContentPage.tsx:428-455`), and a module-level `QUICK_INSERT` array
+   (`BodyFloatingMenu.tsx:78-181`). None performs a registry lookup.
+   `docs/features/content-workspace.md:82` states the notch *"does not show the
+   Site editor's module picker."*
+3. **The SDK has no rich-text surface.** `tiptap`, `prosemirror`,
+   `registerBlock`, `registerNode`, `nodeView`, `blockMenu` and
+   `editorExtension` return zero hits across the SDK and plugin host. The
+   manifest is a closed TypeBox schema with exactly four entrypoints.
 
-Two further consequences worth knowing:
+**And raw HTML in a body is stripped, not escaped.** The richtext allowlist
+(`RICHTEXT_CONFIG.ALLOWED_TAGS`, `src/core/sanitize.ts:123-138`) contains no
+`iframe`, `video`, `img`, `figure` or `table`, so a pasted `<iframe>` is
+silently deleted at publish.
 
-- **Already-published pages are byte-frozen.** Installing or enabling this
-  plugin does not retroactively patch pages baked before it existed; they need a
-  republish (`server/publish/republish.ts`).
-- **Lazily-hydrated fragments are not covered.** `publish.html` does not run on
-  Layer C hole or loop fragments, and those paths discard `cspSources` entirely.
+`base.video` does not help either: it is a site-canvas module usable only in
+page and template trees, so it can sit above or below the body outlet but never
+*within* the copy.
+
+The marker is therefore the only mechanism that achieves arbitrary inline
+placement. Its cost is the preview caveat above.
 
 ---
 
@@ -230,13 +256,14 @@ package.json script inside the Instatic checkout:
 "instatic-plugin": "bun run src/core/plugin-sdk/cli/index.ts"
 ```
 
-So building any plugin requires a local Instatic checkout. For a plugin that
-lives outside that checkout — like this one — the SDK must be linked in, or the
-build fails with `Cannot find module '@instatic/plugin-sdk'`:
+So building requires a local Instatic checkout, and a plugin living outside that
+checkout must have the SDK linked in — otherwise the build fails with
+`Cannot find module '@instatic/plugin-sdk'`:
 
 ```bash
 git clone https://github.com/CoreBunch/Instatic.git ../instatic
-cd ../instatic && bun install
+cd ../instatic && bun install     # must fully succeed; a partial install
+                                  # leaves @sinclair/typebox missing
 
 # Link the SDK into this plugin so its imports resolve.
 cd ../instatic-video-embeds
@@ -249,21 +276,33 @@ bun instatic-plugin lint  ../instatic-video-embeds
 bun instatic-plugin build ../instatic-video-embeds
 ```
 
-Then upload the emitted `.plugin.zip` via the admin UI at `/admin/plugins` →
-Upload Plugin, and approve the `modules.register` and `cms.hooks` permissions.
+That emits `instatic-video-embeds.plugin.zip`. Upload it via the admin UI at
+`/admin/plugins` → Upload Plugin and approve the `cms.hooks` permission.
 
-### Permissions
+Existing posts need a republish before markers in them take effect.
 
-| Permission | Why it is required |
+### Permission: `cms.hooks` — and why it is high-risk
+
+This plugin requests exactly one permission.
+
+| Permission | Why |
 | --- | --- |
-| `modules.register` | Register the canvas module that renders the embed. |
-| `cms.hooks` | Register the `publish.html` filter. **This is the only way to widen `frame-src`** — see above. It is a high-risk permission: the filter receives the entire rendered HTML of every published page and its return value replaces that page. |
+| `cms.hooks` | Register the `publish.html` filter. **This is the only way to widen `frame-src`** — plugin render output cannot carry CSP. |
+
+Be clear-eyed about what that grant means: a `publish.html` filter receives the
+**entire rendered HTML of every published page**, and its return value
+**replaces that page**. Nothing sanitizes the output afterwards. Grant it only
+to plugin code you have read.
+
+This plugin does **not** request `modules.register`: there is no canvas module,
+because a canvas module cannot be placed inside a post body.
+
+---
 
 ## Upstream gotchas worth knowing
 
-Verified against `v0.0.16-3-g6b055cf7`. None of these are defects in this
-plugin, but each cost real debugging time and all are worth filing upstream —
-Instatic is MIT and actively maintained.
+None of these are defects in this plugin, but each cost real debugging time and
+all are worth filing upstream — Instatic is MIT and actively maintained.
 
 ### The `content-editor` scaffold is broken out of the box
 
@@ -280,47 +319,58 @@ export default definePlugin({
 
 Neither key exists on `DefinePluginConfig`
 (`src/core/plugin-sdk/builders/definePlugin.ts` — zero hits for either), so both
-are silently dropped. The consequence is that every `cms.content.*` call fails
-closed **no matter which permissions were granted**, and the failure presents as
-a misconfigured permission grant rather than a dropped manifest key. Do not
-chase it as your own bug, and do not paper over it by over-granting.
+are silently dropped. The consequence: every `cms.content.*` call fails closed
+**no matter which permissions were granted**, and it presents as a
+misconfigured grant rather than a dropped manifest key. Do not chase it as your
+own bug, and do not paper over it by over-granting.
 
-The correct shape: `contentAccess` belongs on the emitted `PluginManifest`, and
-entrypoints are **auto-detected from directory layout** by the build CLI
-(`src/core/plugin-sdk/cli/build.ts`) — a `modules/` directory yields
-`entrypoints.modules`, a `server/index.ts` yields `entrypoints.server`, an
-`editor/index.ts` yields `entrypoints.editor`. Declaring them by hand does
-nothing either way.
+Entrypoints are **auto-detected from directory layout** by the build CLI — a
+`server/index.ts` yields `entrypoints.server`, a `modules/` directory yields
+`entrypoints.modules`. Declaring them by hand does nothing either way.
 
-### `fetch` availability depends on which VM you are in
+### `fetch` and `URL` availability depend on which VM you are in
 
-Plugins run in **two different QuickJS VMs**, and they do not have the same
-globals:
+Plugins run in **two different QuickJS VMs** with different globals:
 
-- **Full plugin VM** (server entrypoint, hooks): `fetch` **is** available,
-  gated on the `network.outbound` permission plus a `networkAllowedHosts`
-  allowlist, and SSRF-guarded. Relevant if you ever want to resolve oEmbed
-  endpoints or poster images server-side.
-- **Module-pack VM** (where module `render()` runs): `fetch` is **not**
-  available — it appears zero times in the generated module-pack bootstrap.
-  Neither are `URL`, `URLSearchParams`, `setTimeout`, `crypto` or
-  `TextEncoder`. `console` exists but is a silent no-op.
+- **Full plugin VM** (server entrypoint, hooks — where this plugin runs):
+  `fetch` **is** available, gated on the `network.outbound` permission plus a
+  `networkAllowedHosts` allowlist, and SSRF-guarded.
+- **Module-pack VM** (canvas module `render()`): `fetch` is **not** available —
+  zero occurrences in the generated module-pack bootstrap. Neither are `URL`,
+  `URLSearchParams`, `setTimeout`, `crypto` or `TextEncoder`. `console` exists
+  but is a silent no-op.
 
 `URL` is the trap: the editor canvas runs the *same* module code in the admin
 browser with full browser globals, so `new URL(...)` works in preview and throws
-only at publish. That is why `src/providers.ts` parses with an anchored regex
-instead.
+only at publish. `src/providers.ts` parses with an anchored regex for that
+reason.
+
+---
 
 ## Develop
 
 ```bash
 bun install
-bun test        # 101 tests, no CMS required
+bun test          # 137 tests, no CMS required
 bun run typecheck
 ```
 
-The parsing, escaping and CSP logic are pure functions with no SDK imports, so
-they are testable standalone.
+The parsing, escaping, marker and CSP logic are pure functions with no SDK
+imports, so they are testable standalone. `bun run typecheck` is scoped to
+`src/` and `tests/` so it passes in a fresh clone;
+`instatic-plugin.config.ts` and `server/index.ts` import the SDK and are
+typechecked by `instatic-plugin lint` / `build` instead.
+
+### Layout
+
+| Path | Role |
+| --- | --- |
+| `src/providers.ts` | URL parsing, ID validation, embed URL construction |
+| `src/embed.ts` | Facade markup, escaping, poster vetting |
+| `src/marker.ts` | Marker matching and substitution |
+| `src/csp.ts` | `frame-src` widening |
+| `src/filter.ts` | The `publish.html` filter body, as a pure function |
+| `server/index.ts` | Thin binding of that function to the hook bus |
 
 ## License
 

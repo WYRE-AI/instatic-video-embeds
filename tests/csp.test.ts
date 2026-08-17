@@ -8,7 +8,7 @@
  * policy is disturbed.
  */
 import { describe, expect, it } from 'bun:test'
-import { addFrameSrcOrigins, hasEmbedMarker } from '../src/csp'
+import { addFrameSrcOrigins } from '../src/csp'
 
 /**
  * The publisher's base policy, serialized exactly as `createBaseCspPlan` +
@@ -152,16 +152,3 @@ describe('addFrameSrcOrigins', () => {
   })
 })
 
-describe('hasEmbedMarker', () => {
-  it('detects the marker when present', () => {
-    expect(hasEmbedMarker('<div class="ive-embed">x</div>', 'ive-embed')).toBe(true)
-  })
-
-  it('returns false when absent, so the page keeps frame-src none', () => {
-    expect(hasEmbedMarker('<p>no video here</p>', 'ive-embed')).toBe(false)
-  })
-
-  it('is defensive about non-string input', () => {
-    expect(hasEmbedMarker(undefined as unknown as string, 'ive-embed')).toBe(false)
-  })
-})
