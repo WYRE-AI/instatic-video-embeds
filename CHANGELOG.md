@@ -64,12 +64,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- Independently reproduced two pre-existing defects in Instatic itself while
-  verifying this plugin's assumptions. Both are upstream issues, not defects in
-  this plugin:
-  - A pre-existing defect in Instatic's richtext sanitizer was identified while
-  verifying this plugin. It is an upstream issue, not a defect in this plugin,
-  and has been reported through the maintainers' private disclosure channel.
-  Details are withheld until a fix is available.
-  - Images, video and tables are stripped from published post bodies, because
-    the richtext allowlist omits `img`, `video`, `table` and `src`.
+- While verifying this plugin's assumptions we identified pre-existing defects
+  in Instatic's richtext sanitizer. These are upstream issues, not defects in
+  this plugin. They have been reported to the maintainers through their private
+  disclosure channel; details are withheld here until a fix is available.
+- Images, video and tables are stripped from published post bodies, because the
+  richtext allowlist omits `img`, `video`, `table` and `src`. This is a
+  functional limitation rather than a vulnerability, and it is the reason this
+  plugin injects embeds at publish time rather than as body markup.
