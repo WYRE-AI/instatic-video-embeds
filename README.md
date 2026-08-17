@@ -92,13 +92,19 @@ renders correctly but cannot be positioned in the copy.
 A plugin-registered module **cannot** lift the page's Content-Security-Policy.
 
 Instatic's own `base.video` returns `cspSources` from `render()` to allow
-YouTube frames. For *plugin* modules that field is stripped at two independent
-boundaries before it ever reaches the publisher:
+YouTube frames. That capability is **host-only**: `cspSources` lives on the host
+`RenderOutput` (`src/core/module-engine/types.ts`) and is **absent from the
+plugin SDK entirely** — it appears nowhere under `src/core/plugin-sdk/`, and
+neither `DefineModuleConfig` nor `PluginRenderOutput` accepts it. A plugin
+cannot declare it in the first place.
 
-| Boundary | File | What survives |
-| --- | --- | --- |
-| QuickJS wire normalizer | `server/plugins/quickjs/bootstrap/src/modulePackRuntime.ts` (`normalizeRenderOutput`) | `{ html, css, js }` |
-| Host module adapter | `src/core/plugins/moduleAdapter.ts` (render wrapper) | `{ html, css, js }` |
+Two runtime normalizers enforce the same conclusion for anything smuggled past
+the type layer, each rebuilding a fresh object with exactly `{ html, css, js }`:
+
+| Boundary | File |
+| --- | --- |
+| QuickJS wire normalizer | `server/plugins/quickjs/bootstrap/src/modulePackRuntime.ts` (`normalizeRenderOutput`) |
+| Host module adapter | `src/core/plugins/moduleAdapter.ts` (render wrapper) |
 
 The published base policy sets `frame-src 'none'`
 (`createBaseCspPlan`, `src/core/publisher/cspPlan.ts`). So a plugin module that
@@ -252,6 +258,58 @@ Upload Plugin, and approve the `modules.register` and `cms.hooks` permissions.
 | --- | --- |
 | `modules.register` | Register the canvas module that renders the embed. |
 | `cms.hooks` | Register the `publish.html` filter. **This is the only way to widen `frame-src`** — see above. It is a high-risk permission: the filter receives the entire rendered HTML of every published page and its return value replaces that page. |
+
+## Upstream gotchas worth knowing
+
+Verified against `v0.0.16-3-g6b055cf7`. None of these are defects in this
+plugin, but each cost real debugging time and all are worth filing upstream —
+Instatic is MIT and actively maintained.
+
+### The `content-editor` scaffold is broken out of the box
+
+`bun instatic-plugin init <name> --kind content-editor` emits a config
+containing both `contentAccess` and `entrypoints` **inside** `definePlugin()`:
+
+```ts
+export default definePlugin({
+  // …
+  contentAccess: [{ table: 'pages', modes: ['read', 'write'] }],
+  entrypoints: { server: 'server/index.js' },
+})
+```
+
+Neither key exists on `DefinePluginConfig`
+(`src/core/plugin-sdk/builders/definePlugin.ts` — zero hits for either), so both
+are silently dropped. The consequence is that every `cms.content.*` call fails
+closed **no matter which permissions were granted**, and the failure presents as
+a misconfigured permission grant rather than a dropped manifest key. Do not
+chase it as your own bug, and do not paper over it by over-granting.
+
+The correct shape: `contentAccess` belongs on the emitted `PluginManifest`, and
+entrypoints are **auto-detected from directory layout** by the build CLI
+(`src/core/plugin-sdk/cli/build.ts`) — a `modules/` directory yields
+`entrypoints.modules`, a `server/index.ts` yields `entrypoints.server`, an
+`editor/index.ts` yields `entrypoints.editor`. Declaring them by hand does
+nothing either way.
+
+### `fetch` availability depends on which VM you are in
+
+Plugins run in **two different QuickJS VMs**, and they do not have the same
+globals:
+
+- **Full plugin VM** (server entrypoint, hooks): `fetch` **is** available,
+  gated on the `network.outbound` permission plus a `networkAllowedHosts`
+  allowlist, and SSRF-guarded. Relevant if you ever want to resolve oEmbed
+  endpoints or poster images server-side.
+- **Module-pack VM** (where module `render()` runs): `fetch` is **not**
+  available — it appears zero times in the generated module-pack bootstrap.
+  Neither are `URL`, `URLSearchParams`, `setTimeout`, `crypto` or
+  `TextEncoder`. `console` exists but is a silent no-op.
+
+`URL` is the trap: the editor canvas runs the *same* module code in the admin
+browser with full browser globals, so `new URL(...)` works in preview and throws
+only at publish. That is why `src/providers.ts` parses with an anchored regex
+instead.
 
 ## Develop
 

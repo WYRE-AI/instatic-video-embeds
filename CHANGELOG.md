@@ -36,6 +36,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   could not be confirmed from a primary source, and guessing at an embed origin
   would undermine the allowlist model the rest of the parser depends on.
 
+### Upstream issues found
+
+- The `--kind content-editor` scaffold emits `contentAccess` and `entrypoints`
+  inside `definePlugin()`, where neither key exists. Both are silently dropped,
+  making every `cms.content.*` call fail closed regardless of granted
+  permissions. Documented in the README.
+
 ### Security
 
 - Independently reproduced two pre-existing defects in Instatic itself while
